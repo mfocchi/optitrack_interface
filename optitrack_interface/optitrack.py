@@ -6,6 +6,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Twist
 from rclpy import qos
 import socket
 import struct
@@ -16,18 +17,19 @@ from math import atan2, asin
 from optitrack_interface.nat_net_client import NatNetClient
 import sys
 TRACKED_ROBOT_ID = 20 # IMPORTANT: must match the streaming ID of the optitrack program
-
+import numpy as np
 
 class Optitrack(Node):
   def __init__(self, debug=False):
     super().__init__('optitrack_node')
-    self.publisher_ = self.create_publisher(PoseStamped, '/optitrack/pose', qos.qos_profile_sensor_data)
+    self.publisher_pose = self.create_publisher(PoseStamped, '/optitrack/pose', 10)
+    self.publisher_twist = self.create_publisher(Twist, '/optitrack/twist', 10)
     
     #publisher_frequency = 200.0  # seconds
     #self.pub_timer = self.create_timer(1/publisher_frequency, self.pub_timer_callback)
     self.actual_pose = PoseStamped()
     self.feasible_pose = PoseStamped()
-
+    self.twist_msg = Twist()
     self.debug = debug
     self.calls = 0
     if self.debug:
@@ -38,14 +40,46 @@ class Optitrack(Node):
     streamingClient = NatNetClient(ver=(3, 2, 0, 0), quiet=True)
     streamingClient.rigidBodyListener = self.receiveRigidBodyFrame
     streamingClient.run()
+  
+  def computeOmega(self, q, q_old, dt):
+     q_old_conj = q_old.copy()
+     q_old_conj.x *= -1
+     q_old_conj.y *= -1
+     q_old_conj.z *= -1
+     
+     work = (2/dt) * self.quatmultiply(q, q_old_conj)
+     #take immaginary part
+     omega = work[1:]
+     return omega
+
+  def quatMultiply(self, q, r):
+    s1 = q.w
+    s2 = r.w
+    v1 = np.array([q.x, q.y, q.z])
+    v2 = np.array([r.x, r.y, r.z])
+
+    # Calculate vector portion of quaternion product
+    vec = s1*v2 + s2*v1 + np.cross(v1,v2)
+    
+    # Calculate scalar portion of quaternion product
+    scalar = s1*s2 - v1.dot(v2)
+        
+    qout = np.array([scalar,  vec])
 
   def debug_timer_callback(self):
     print("Hz: "+str(self.calls))
     self.calls = 0
 
   def pub_timer_callback(self):
-    self.publisher_.publish(self.actual_pose)
-
+    self.publisher_pose.publish(self.feasible_pose)
+    self.twist_msg.linear.x = self.vel[0]
+    self.twist_msg.linear.y = self.vel[1]
+    self.twist_msg.linear.z = self.vel[2]
+    self.twist_msg.angular.x = self.omega[0]
+    self.twist_msg.angular.x = self.omega[1]
+    self.twist_msg.angular.z = self.omega[2]
+    self.publisher_twist.publish(self.twist_msg)
+    
   def receiveRigidBodyFrame(self, id, position, rotation):
     if (id==TRACKED_ROBOT_ID):
  
@@ -73,14 +107,19 @@ class Optitrack(Node):
            self.actual_pose.pose.orientation.z *= -1;
 
       #check discontinuities wrt previous
-      if  not( abs(self.actual_pose.pose.orientation.w - self.actual_pose.pose.orientation.w)>0.4 or  
-           abs(self.actual_pose.pose.orientation.x - self.actual_pose.pose.orientation.x)>0.4 or 
-           abs(self.actual_pose.pose.orientation.y - self.actual_pose.pose.orientation.y)>0.4 or
-           abs(self.actual_pose.pose.orientation.z - self.actual_pose.pose.orientation.z)>0.4):
-           # update the value if there are no discontiuities
-           self.feasible_pose = self.actual_pose
-          
-
+      if  not( abs(self.feasible_pose.pose.orientation.w - self.actual_pose.pose.orientation.w)>0.4 or  
+          abs(self.feasible_pose.pose.orientation.x - self.actual_pose.pose.orientation.x)>0.4 or 
+          abs(self.feasible_pose.pose.orientation.y - self.actual_pose.pose.orientation.y)>0.4 or
+          abs(self.feasible_pose.pose.orientation.z - self.actual_pose.pose.orientation.z)>0.4):
+          # compute twists
+          dt = self.actual_pose.header.stamp.tosec() - self.feasible_pose.header.stamp.to_sec()
+          self.vel = (self.self.actual_pose.pose.orientation- self.feasible_pose.pose.orientation)/dt
+          self.omega = self.computeOmega(self.actual_pose.pose.orientation, self.feasible_pose.orientation, dt)
+          # update the value if there are no discontiuities
+          self.feasible_pose = self.actual_pose
+      
+      
+      
       self.calls = self.calls + 1
 
     else:
