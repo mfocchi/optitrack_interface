@@ -22,9 +22,9 @@ class Optitrack(Node):
   def __init__(self, debug=False):
     super().__init__('optitrack_node')
     self.publisher_ = self.create_publisher(PoseStamped, '/optitrack/pose', qos.qos_profile_sensor_data)
-
-    publisher_frequency = 200.0  # seconds
-    self.pub_timer = self.create_timer(1/publisher_frequency, self.pub_timer_callback)
+    
+    #publisher_frequency = 200.0  # seconds
+    #self.pub_timer = self.create_timer(1/publisher_frequency, self.pub_timer_callback)
     self.actual_pose = PoseStamped()
     self.feasible_pose = PoseStamped()
 
@@ -91,14 +91,21 @@ class Optitrack(Node):
 
 def main(args=None):
   rclpy.init(args=args)
+  rate = node.create_rate(200)  
+  
   args = sys.argv[1:]
   debug = False
   if (len(args) == 1):
     if args[0] == '--debug':
       debug = True
   optitrack = Optitrack(debug=debug)
-
-  rclpy.spin(optitrack)
+  try:
+    while rclpy.ok():
+        optitrack.pub_timer_callback()
+        rclpy.spin_once(optitrack)
+        rate.sleep()
+  except KeyboardInterrupt:
+    pass
 
   optitrack.destroy_node()
   rclpy.shutdown()
