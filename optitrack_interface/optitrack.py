@@ -26,6 +26,7 @@ class Optitrack(Node):
     publisher_frequency = 200.0  # seconds
     self.pub_timer = self.create_timer(1/publisher_frequency, self.pub_timer_callback)
     self.actual_pose = PoseStamped()
+    self.feasible_pose = PoseStamped()
 
     self.debug = debug
     self.calls = 0
@@ -61,6 +62,24 @@ class Optitrack(Node):
       self.actual_pose.pose.orientation.y = rotation[1] # q_y
       self.actual_pose.pose.orientation.z = rotation[0] # q_z
 
+      #flip quaternion if long path 
+      old_quat = np.array(self.feasible.pose.pose.orientation.w, self.actual_pose.pose.orientation.x, self.actual_pose.pose.orientation.y, self.actual_pose.pose.orientation.z)
+      new_quat = np.array(self.actual_pose.pose.pose.orientation.w, self.actual_pose.pose.orientation.x, self.actual_pose.pose.orientation.y, self.actual_pose.pose.orientation.z)
+      if old_quat.dot(new_quat) < 0:
+          #flip new quat
+           self.actual_pose.pose.orientation.w *= -1;
+           self.actual_pose.pose.orientation.x *= -1;
+           self.actual_pose.pose.orientation.y *= -1;
+           self.actual_pose.pose.orientation.z *= -1;
+
+      #check discontinuities wrt previous
+      if  not( abs(self.actual_pose.pose.orientation.w - self.actual_pose.pose.orientation.w)>0.4 or  
+           abs(self.actual_pose.pose.orientation.x - self.actual_pose.pose.orientation.x)>0.4 or 
+           abs(self.actual_pose.pose.orientation.y - self.actual_pose.pose.orientation.y)>0.4 or
+           abs(self.actual_pose.pose.orientation.z - self.actual_pose.pose.orientation.z)>0.4):
+           # update the value if there are no discontiuities
+           self.feasible_pose = self.actual_pose
+          
 
       self.calls = self.calls + 1
 
