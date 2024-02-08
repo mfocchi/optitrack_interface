@@ -22,40 +22,48 @@ class Optitrack(Node):
   def __init__(self, debug=False):
     super().__init__('optitrack_node')
     self.publisher_ = self.create_publisher(PoseStamped, '/optitrack/pose', qos.qos_profile_sensor_data)
+
+    publisher_frequency = 200.0  # seconds
+    self.pub_timer = self.create_timer(1/publisher_frequency, self.pub_timer_callback)
+    self.actual_pose = PoseStamped()
+
     self.debug = debug
     self.calls = 0
     if self.debug:
-      self.timer = self.create_timer(1.0, self.timer_callback)
+      self.debug_timer = self.create_timer(1.0, self.debug_timer_callback)
 
-    self.get_logger().info('Optitrack node running - version 2.1')
+    self.get_logger().info('Optitrack node running - version 2.2')
 
     streamingClient = NatNetClient(ver=(3, 2, 0, 0), quiet=True)
     streamingClient.rigidBodyListener = self.receiveRigidBodyFrame
     streamingClient.run()
 
-  def timer_callback(self):
+  def debug_timer_callback(self):
     print("Hz: "+str(self.calls))
     self.calls = 0
 
+  def pub_timer_callback(self):
+    self.publisher_.publish(self.actual_pose)
+
   def receiveRigidBodyFrame(self, id, position, rotation):
     if (id==TRACKED_ROBOT_ID):
-      msg = PoseStamped()
+ 
       # retrieve as originally published by the optitrack
-      msg.header.frame_id = "tag"
-      msg.header.stamp = self.get_clock().now().to_msg()
+      self.actual_pose.header.frame_id = "tag"
+      self.actual_pose.header.stamp = self.get_clock().now().to_msg()
 
-      msg.pose.position.x = position[0]
-      msg.pose.position.y = position[1]
-      msg.pose.position.z = position[2]
+      self.actual_pose.pose.position.x = position[0]
+      self.actual_pose.pose.position.y = position[1]
+      self.actual_pose.pose.position.z = position[2]
 
-      msg.pose.orientation.w = rotation[3] # q_w
-      msg.pose.orientation.x = rotation[2] # q_x
-      msg.pose.orientation.y = rotation[1] # q_y
-      msg.pose.orientation.z = rotation[0] # q_z
+      self.actual_pose.pose.orientation.w = rotation[3] # q_w
+      self.actual_pose.pose.orientation.x = rotation[2] # q_x
+      self.actual_pose.pose.orientation.y = rotation[1] # q_y
+      self.actual_pose.pose.orientation.z = rotation[0] # q_z
 
-      self.publisher_.publish(msg)
+
       self.calls = self.calls + 1
-           
+
     else:
       self.get_logger().info('Message with different tracker ID' + str(id))
 
