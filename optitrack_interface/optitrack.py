@@ -14,18 +14,18 @@ from threading import Thread
 from time import time
 from math import atan2, asin
 from optitrack_interface.nat_net_client import NatNetClient
-
+import sys
 TRACKED_ROBOT_ID = 20 # IMPORTANT: must match the streaming ID of the optitrack program
 
 
 class Optitrack(Node):
-  def __init__(self):
+  def __init__(self, debug=False):
     super().__init__('optitrack_node')
     self.publisher_ = self.create_publisher(PoseStamped, '/optitrack/pose', qos.qos_profile_sensor_data)
-
+    self.debug = debug
     self.calls = 0
-
-    self.timer = self.create_timer(1.0, self.timer_callback)
+    if self.debug:
+      self.timer = self.create_timer(1.0, self.timer_callback)
 
     self.get_logger().info('Optitrack node running - version 2.1')
 
@@ -55,6 +55,7 @@ class Optitrack(Node):
 
       self.publisher_.publish(msg)
       self.calls = self.calls + 1
+           
     else:
       self.get_logger().info('Message with different tracker ID' + str(id))
 
@@ -63,8 +64,12 @@ class Optitrack(Node):
 
 def main(args=None):
   rclpy.init(args=args)
-
-  optitrack = Optitrack()
+  args = sys.argv[1:]
+  debug = False
+  if (len(args) == 1):
+    if args[0] == '--debug':
+      debug = True
+  optitrack = Optitrack(debug=debug)
 
   rclpy.spin(optitrack)
 
