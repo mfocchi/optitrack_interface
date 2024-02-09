@@ -18,6 +18,9 @@ from optitrack_interface.nat_net_client import NatNetClient
 import sys
 TRACKED_ROBOT_ID = 20 # IMPORTANT: must match the streaming ID of the optitrack program
 import numpy as np
+from copy import deepcopy
+from rclpy.time import Time
+
 
 class Optitrack(Node):
   def __init__(self, debug=False):
@@ -46,23 +49,46 @@ class Optitrack(Node):
     streamingClient = NatNetClient(ver=(3, 2, 0, 0), quiet=True)
     streamingClient.rigidBodyListener = self.receiveRigidBodyFrame
     streamingClient.run()
-  
+
+  def euler_from_quaternion(self, quaternion):
+    """
+    Converts quaternion (w in last place) to euler roll, pitch, yaw
+    quaternion = [x, y, z, w]
+    Bellow should be replaced when porting for ROS 2 Python tf_conversions is done.
+    """
+    x = quaternion.x
+    y = quaternion.y
+    z = quaternion.z
+    w = quaternion.w
+
+    sinr_cosp = 2 * (w * x + y * z)
+    cosr_cosp = 1 - 2 * (x * x + y * y)
+    roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2 * (w * y - z * x)
+    pitch = np.arcsin(sinp)
+
+    siny_cosp = 2 * (w * z + x * y)
+    cosy_cosp = 1 - 2 * (y * y + z * z)
+    yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+    return roll, pitch, yaw
+
   def computeOmega(self, q, q_old, dt):
-     q_old_conj = q_old.copy()
-     q_old_conj.x *= -1
-     q_old_conj.y *= -1
-     q_old_conj.z *= -1
-     
-     work = (2/dt) * self.quatmultiply(q, q_old_conj)
+     q1 = np.array([q.w, q.x, q.y, q.z])
+     q2 = np.array([q_old.w, -q_old.x, -q_old.y, -q_old.z])
+ 
+     work = (2/dt) * self.quatMultiply(q1, q2)
      #take immaginary part
      omega = work[1:]
      return omega
 
   def quatMultiply(self, q, r):
-    s1 = q.w
-    s2 = r.w
-    v1 = np.array([q.x, q.y, q.z])
-    v2 = np.array([r.x, r.y, r.z])
+    s1 = q[0]
+    s2 = r[0]
+    v1 = q[1:]
+    v2 = r[1:]
+
 
     # Calculate vector portion of quaternion product
     vec = s1*v2 + s2*v1 + np.cross(v1,v2)
@@ -70,7 +96,15 @@ class Optitrack(Node):
     # Calculate scalar portion of quaternion product
     scalar = s1*s2 - v1.dot(v2)
         
-    qout = np.array([scalar,  vec])
+    qout = np.concatenate(([scalar], vec))
+    return qout
+  
+  def getTimeInterval(self, timestamp1, timestamp2):
+    nanosec1 = float(timestamp1.nanosec) * 1e-9;
+    time1 = float(timestamp1.sec) + nanosec1
+    nanosec2 = float(timestamp2.nanosec) * 1e-9;
+    time2 = float(timestamp2.sec) + nanosec2
+    return time1- time2
 
   def debug_timer_callback(self):
     print("Hz: "+str(self.calls))
@@ -107,26 +141,33 @@ class Optitrack(Node):
       new_quat = np.array([self.actual_pose.pose.orientation.w, self.actual_pose.pose.orientation.x, self.actual_pose.pose.orientation.y, self.actual_pose.pose.orientation.z])
       if old_quat.dot(new_quat) < 0:
           #flip new quat
-           self.actual_pose.pose.orientation.w *= -1;
-           self.actual_pose.pose.orientation.x *= -1;
-           self.actual_pose.pose.orientation.y *= -1;
-           self.actual_pose.pose.orientation.z *= -1;
+          self.actual_pose.pose.orientation.w *= -1;
+          self.actual_pose.pose.orientation.x *= -1;
+          self.actual_pose.pose.orientation.y *= -1;
+          self.actual_pose.pose.orientation.z *= -1;
 
-      #check discontinuities wrt previous
-      if  not( abs(self.feasible_pose.pose.orientation.w - self.actual_pose.pose.orientation.w)>0.4 or  
-          abs(self.feasible_pose.pose.orientation.x - self.actual_pose.pose.orientation.x)>0.4 or 
-          abs(self.feasible_pose.pose.orientation.y - self.actual_pose.pose.orientation.y)>0.4 or
-          abs(self.feasible_pose.pose.orientation.z - self.actual_pose.pose.orientation.z)>0.4):
-          # compute twists
-          old_pos = np.array([self.feasible_pose.pose.position.x, self.feasible_pose.pose.position.y, self.feasible_pose.pose.position.z])
-          act_pos = np.array([self.actual_pose.pose.position.x, self.actual_pose.pose.position.y, self.actual_pose.pose.position.z])
-          dt = self.actual_pose.header.stamp.tosec() - self.feasible_pose.header.stamp.to_sec()
-          self.vel = (act_pos - old_pos)/dt
-          self.omega = self.computeOmega(self.actual_pose.pose.orientation, self.feasible_pose.orientation, dt)
-          # update the value if there are no discontiuities
-          self.feasible_pose = self.actual_pose.copy()
-      
-       
+      #check discontinuities wrt previous TODO
+      # if  not( abs(self.feasible_pose.pose.orientation.w - self.actual_pose.pose.orientation.w)>0.4 or  
+      #     abs(self.feasible_pose.pose.orientation.x - self.actual_pose.pose.orientation.x)>0.4 or 
+      #     abs(self.feasible_pose.pose.orientation.y - self.actual_pose.pose.orientation.y)>0.4 or
+      #     abs(self.feasible_pose.pose.orientation.z - self.actual_pose.pose.orientation.z)>0.4):
+      #     # compute twists
+      #     old_pos = np.array([self.feasible_pose.pose.position.x, self.feasible_pose.pose.position.y, self.feasible_pose.pose.position.z])
+      #     act_pos = np.array([self.actual_pose.pose.position.x, self.actual_pose.pose.position.y, self.actual_pose.pose.position.z])
+      #     dt=self.getTimeInterval(self.actual_pose.header.stamp, self.feasible_pose.header.stamp)
+      #     self.vel = (act_pos - old_pos)/dt
+      #     self.omega = self.computeOmega(self.actual_pose.pose.orientation, self.feasible_pose.pose.orientation, dt)
+      #     # update the value if there are no discontiuities
+      #     self.feasible_pose = deepcopy(self.actual_pose)
+
+      dt=self.getTimeInterval(self.actual_pose.header.stamp, self.feasible_pose.header.stamp)
+      old_pos = np.array([self.feasible_pose.pose.position.x, self.feasible_pose.pose.position.y, self.feasible_pose.pose.position.z])
+      act_pos = np.array([self.actual_pose.pose.position.x, self.actual_pose.pose.position.y, self.actual_pose.pose.position.z])
+      r,p,y_new = self.euler_from_quaternion(self.actual_pose.pose.orientation)
+      r,p,y_old = self.euler_from_quaternion(self.feasible_pose.pose.orientation)
+      self.vel = (act_pos - old_pos)/dt
+      self.omega = (y_new - y_old)/dt
+      self.feasible_pose = deepcopy(self.actual_pose)  
       self.calls = self.calls + 1
 
     else:
