@@ -24,12 +24,18 @@ class Optitrack(Node):
     super().__init__('optitrack_node')
     self.publisher_pose = self.create_publisher(PoseStamped, '/optitrack/pose', 10)
     self.publisher_twist = self.create_publisher(Twist, '/optitrack/twist', 10)
+    #not used
+    #node = rclpy.create_node('optitrack_node')
+    #self.rate = node.create_rate(200) 
     
-    #publisher_frequency = 200.0  # seconds
-    #self.pub_timer = self.create_timer(1/publisher_frequency, self.pub_timer_callback)
+    publisher_frequency = 200.0  # hz
+    self.pub_timer = self.create_timer(1/publisher_frequency, self.pub_timer_callback)
     self.actual_pose = PoseStamped()
     self.feasible_pose = PoseStamped()
     self.twist_msg = Twist()
+    self.vel = np.zeros((3))
+    self.omega = np.zeros((3))
+
     self.debug = debug
     self.calls = 0
     if self.debug:
@@ -97,8 +103,8 @@ class Optitrack(Node):
       self.actual_pose.pose.orientation.z = rotation[0] # q_z
 
       #flip quaternion if long path 
-      old_quat = np.array(self.feasible.pose.pose.orientation.w, self.actual_pose.pose.orientation.x, self.actual_pose.pose.orientation.y, self.actual_pose.pose.orientation.z)
-      new_quat = np.array(self.actual_pose.pose.pose.orientation.w, self.actual_pose.pose.orientation.x, self.actual_pose.pose.orientation.y, self.actual_pose.pose.orientation.z)
+      old_quat = np.array([self.feasible_pose.pose.orientation.w, self.feasible_pose.pose.orientation.x, self.feasible_pose.pose.orientation.y, self.feasible_pose.pose.orientation.z])
+      new_quat = np.array([self.actual_pose.pose.orientation.w, self.actual_pose.pose.orientation.x, self.actual_pose.pose.orientation.y, self.actual_pose.pose.orientation.z])
       if old_quat.dot(new_quat) < 0:
           #flip new quat
            self.actual_pose.pose.orientation.w *= -1;
@@ -112,14 +118,15 @@ class Optitrack(Node):
           abs(self.feasible_pose.pose.orientation.y - self.actual_pose.pose.orientation.y)>0.4 or
           abs(self.feasible_pose.pose.orientation.z - self.actual_pose.pose.orientation.z)>0.4):
           # compute twists
+          old_pos = np.array([self.feasible_pose.pose.position.x, self.feasible_pose.pose.position.y, self.feasible_pose.pose.position.z])
+          act_pos = np.array([self.actual_pose.pose.position.x, self.actual_pose.pose.position.y, self.actual_pose.pose.position.z])
           dt = self.actual_pose.header.stamp.tosec() - self.feasible_pose.header.stamp.to_sec()
-          self.vel = (self.self.actual_pose.pose.orientation- self.feasible_pose.pose.orientation)/dt
+          self.vel = (act_pos - old_pos)/dt
           self.omega = self.computeOmega(self.actual_pose.pose.orientation, self.feasible_pose.orientation, dt)
           # update the value if there are no discontiuities
-          self.feasible_pose = self.actual_pose
+          self.feasible_pose = self.actual_pose.copy()
       
-      
-      
+       
       self.calls = self.calls + 1
 
     else:
@@ -130,7 +137,7 @@ class Optitrack(Node):
 
 def main(args=None):
   rclpy.init(args=args)
-  rate = node.create_rate(200)  
+ 
   
   args = sys.argv[1:]
   debug = False
@@ -138,14 +145,17 @@ def main(args=None):
     if args[0] == '--debug':
       debug = True
   optitrack = Optitrack(debug=debug)
-  try:
-    while rclpy.ok():
-        optitrack.pub_timer_callback()
-        rclpy.spin_once(optitrack)
-        rate.sleep()
-  except KeyboardInterrupt:
-    pass
 
+  # try:
+  #   while rclpy.ok():
+  #       #not used
+  #       # optitrack.pub_timer_callback()
+  #       # rclpy.spin_once(optitrack)
+  #       # optitrack.rate.sleep()        
+  # except KeyboardInterrupt:
+  #   pass
+
+  rclpy.spin(optitrack)
   optitrack.destroy_node()
   rclpy.shutdown()
 
