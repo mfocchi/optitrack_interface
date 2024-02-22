@@ -7,6 +7,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Quaternion
 from rclpy import qos
 import socket
 import struct
@@ -21,6 +22,7 @@ import numpy as np
 from copy import deepcopy
 from rclpy.time import Time
 import math
+import tf2_ros
 
 class Optitrack(Node):
   def __init__(self, debug=False):
@@ -38,8 +40,8 @@ class Optitrack(Node):
     self.publisher_frequency = 200.0  # hz
     self.pub_timer = self.create_timer(1/self.publisher_frequency, self.pub_timer_callback)
     self.actual_pose = PoseStamped()
-    self.actual_pose_old =PoseStamped()
     self.feasible_pose = PoseStamped()
+    self.feasible_pose_old =PoseStamped()
     self.twist_msg = Twist()
     self.vel = np.zeros((3))
     self.omega = np.zeros((3))
@@ -47,6 +49,7 @@ class Optitrack(Node):
     self.debug = debug
     self.calls = 0
     self.total_calls = 0
+    self.new_data = False
     if self.debug:
       self.debug_timer = self.create_timer(1.0, self.debug_timer_callback)
 
@@ -83,6 +86,83 @@ class Optitrack(Node):
     yaw_z = math.atan2(t3, t4)
   
     return roll_x, pitch_y, yaw_z 
+
+  def quaternion_from_euler(self, ai, aj, ak, axes='szyx'):
+      """Return quaternion from Euler angles and axis sequence.
+
+      ai, aj, ak : Euler's roll, pitch and yaw angles
+      axes : One of 24 axis sequences as string or encoded tuple
+
+      >>> q = quaternion_from_euler(1, 2, 3, 'ryxz')
+      >>> numpy.allclose(q, [0.310622, -0.718287, 0.444435, 0.435953])
+      True
+
+      """
+      # epsilon for testing whether a number is close to zero
+      _EPS = numpy.finfo(float).eps * 4.0
+
+      # axis sequences for Euler angles
+      _NEXT_AXIS = [1, 2, 0, 1]
+
+      # map axes strings to/from tuples of inner axis, parity, repetition, frame
+      _AXES2TUPLE = {
+          'sxyz': (0, 0, 0, 0), 'sxyx': (0, 0, 1, 0), 'sxzy': (0, 1, 0, 0),
+          'sxzx': (0, 1, 1, 0), 'syzx': (1, 0, 0, 0), 'syzy': (1, 0, 1, 0),
+          'syxz': (1, 1, 0, 0), 'syxy': (1, 1, 1, 0), 'szxy': (2, 0, 0, 0),
+          'szxz': (2, 0, 1, 0), 'szyx': (2, 1, 0, 0), 'szyz': (2, 1, 1, 0),
+          'rzyx': (0, 0, 0, 1), 'rxyx': (0, 0, 1, 1), 'ryzx': (0, 1, 0, 1),
+          'rxzx': (0, 1, 1, 1), 'rxzy': (1, 0, 0, 1), 'ryzy': (1, 0, 1, 1),
+          'rzxy': (1, 1, 0, 1), 'ryxy': (1, 1, 1, 1), 'ryxz': (2, 0, 0, 1),
+          'rzxz': (2, 0, 1, 1), 'rxyz': (2, 1, 0, 1), 'rzyz': (2, 1, 1, 1)}
+
+      _TUPLE2AXES = dict((v, k) for k, v in _AXES2TUPLE.items())
+
+      try:
+          firstaxis, parity, repetition, frame = _AXES2TUPLE[axes.lower()]
+      except (AttributeError, KeyError):
+          _ = _TUPLE2AXES[axes]
+          firstaxis, parity, repetition, frame = axes
+
+      i = firstaxis
+      j = _NEXT_AXIS[i+parity]
+      k = _NEXT_AXIS[i-parity+1]
+
+      if frame:
+          ai, ak = ak, ai
+      if parity:
+          aj = -aj
+
+      ai /= 2.0
+      aj /= 2.0
+      ak /= 2.0
+      ci = math.cos(ai)
+      si = math.sin(ai)
+      cj = math.cos(aj)
+      sj = math.sin(aj)
+      ck = math.cos(ak)
+      sk = math.sin(ak)
+      cc = ci*ck
+      cs = ci*sk
+      sc = si*ck
+      ss = si*sk
+
+      quaternion = Quaternion() 
+      if repetition:
+          quaternion.z = cj*(cs + sc)
+          quaternion.y = sj*(cc + ss)
+          quaternion.x = sj*(cs - sc)
+          quaternion.w = cj*(cc - ss)
+      else:
+          quaternion.z = cj*sc - sj*cs
+          quaternion.y = cj*ss + sj*cc
+          quaternion.x = cj*cs - sj*sc
+          quaternion.w = cj*cc + sj*ss
+      if parity:
+          quaternion.y *= -1
+
+      return quaternion
+
+
 
   def computeOmega(self, q, q_old, dt):
      q1 = np.array([q.w, q.x, q.y, q.z])
@@ -124,19 +204,25 @@ class Optitrack(Node):
   def pub_timer_callback(self):
  
     if self.total_calls>=1:#this publishes only if it has received at least 1 message in the other thread
-      #I canno compute twist here cause if I have delay in the other thread I compute 0
-      #self.feasible_pose = deepcopy(self.actual_pose) 
 
-      self.feasible_pose.header.stamp = self.actual_pose.header.stamp
-      self.feasible_pose.pose.position.x = self.actual_pose.pose.position.x 
-      self.feasible_pose.pose.position.y = self.actual_pose.pose.position.y 
-      self.feasible_pose.pose.position.z = self.actual_pose.pose.position.z 
-      self.feasible_pose.pose.orientation.w = self.actual_pose.pose.orientation.w 
-      self.feasible_pose.pose.orientation.x = self.actual_pose.pose.orientation.x 
-      self.feasible_pose.pose.orientation.y = self.actual_pose.pose.orientation.y 
-      self.feasible_pose.pose.orientation.z = self.actual_pose.pose.orientation.z 
+          
+      if self.new_data:       
+        self.vel, self.omega[2], _, _, _ = self.computeNumericalDiff(self.actual_pose, self.feasible_pose, self.publisher_frequency)
+        self.new_data = False
+        self.feasible_pose = deepcopy(self.actual_pose)
+      else:
+        #do extrapolation if message has not changed is non zero (eg skip initial point)
+        self.vel, self.omega[2], r,p,y = self.computeNumericalDiff(self.feasible_pose, self.feasible_pose_old, self.publisher_frequency)
+        self.feasible_pose_old = deepcopy(self.feasible_pose)
 
-      self.publisher_pose.publish(self.feasible_pose)
+        #extrapolate feasible pose
+        self.feasible_pose.header.stamp = self.get_clock().now().to_msg()
+        self.feasible_pose.pose.position.x += self.vel[0]*self.publisher_frequency
+        self.feasible_pose.pose.position.y += self.vel[1]*self.publisher_frequency
+        self.feasible_pose.pose.position.z += self.vel[2]*self.publisher_frequency
+
+        #integrate quatertion
+        self.feasible_pose.pose.orientation = self.quaternion_from_euler(r, p, y+self.omega[2]*self.publisher_frequency)
 
       self.twist_msg.linear.x = self.vel[0]
       self.twist_msg.linear.y = self.vel[1]
@@ -145,7 +231,19 @@ class Optitrack(Node):
       self.twist_msg.angular.y = self.omega[1]
       self.twist_msg.angular.z = self.omega[2]
       self.publisher_twist.publish(self.twist_msg)
+
+      self.publisher_pose.publish(self.feasible_pose)
+
     
+  def computeNumericalDiff(self, act, old, freq):
+      old_pos = np.array([old.pose.position.x, old.pose.position.y, old.pose.position.z])
+      act_pos = np.array([act.pose.position.x, act.pose.position.y, act.pose.position.z])
+      r_new,p_new,y_new = self.euler_from_quaternion(act.pose.orientation)
+      r_old,p_old,y_old = self.euler_from_quaternion(old.pose.orientation)
+      vel = (act_pos - old_pos)*freq
+      omega = (y_new - y_old)*freq
+      return vel, omega, r_new,p_new,y_new
+
   def receiveRigidBodyFrame(self, id, position, rotation):
     if (id==TRACKED_ROBOT_ID):
  
@@ -188,18 +286,17 @@ class Optitrack(Node):
       #     self.feasible_pose = deepcopy(self.actual_pose)
 
       #this cannot be zero
-      dt=self.getTimeInterval(self.actual_pose.header.stamp, self.actual_pose_old.header.stamp)
+      #dt=self.getTimeInterval(self.actual_pose.header.stamp, self.actual_pose_old.header.stamp)
       
-      if dt>0.: #do the computation only when dt is non zero (eg skip initial point)
-      
-        old_pos = np.array([self.actual_pose_old.pose.position.x, self.actual_pose_old.pose.position.y, self.actual_pose_old.pose.position.z])
-        act_pos = np.array([self.actual_pose.pose.position.x, self.actual_pose.pose.position.y, self.actual_pose.pose.position.z])
-        r,p,y_new = self.euler_from_quaternion(self.actual_pose.pose.orientation)
-        r,p,y_old = self.euler_from_quaternion(self.actual_pose_old.pose.orientation)
-        self.vel = (act_pos - old_pos)*self.publisher_frequency
-        self.omega[2] = (y_new - y_old)*self.publisher_frequency
-        self.actual_pose_old = deepcopy(self.actual_pose)
-
+      # if dt>0.: #do the computation only when dt is non zero (eg skip initial point)
+      #   old_pos = np.array([self.actual_pose_old.pose.position.x, self.actual_pose_old.pose.position.y, self.actual_pose_old.pose.position.z])
+      #   act_pos = np.array([self.actual_pose.pose.position.x, self.actual_pose.pose.position.y, self.actual_pose.pose.position.z])
+      #   r,p,y_new = self.euler_from_quaternion(self.actual_pose.pose.orientation)
+      #   r,p,y_old = self.euler_from_quaternion(self.actual_pose_old.pose.orientation)
+      #   self.vel = (act_pos - old_pos)*self.publisher_frequency
+      #   self.omega[2] = (y_new - y_old)*self.publisher_frequency
+      #   self.actual_pose_old = deepcopy(self.actual_pose)
+      self.new_data = True
 
     
       # if self.debug:
