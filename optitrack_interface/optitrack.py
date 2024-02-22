@@ -38,6 +38,7 @@ class Optitrack(Node):
     self.publisher_frequency = 200.0  # hz
     self.pub_timer = self.create_timer(1/self.publisher_frequency, self.pub_timer_callback)
     self.actual_pose = PoseStamped()
+    self.actual_pose_old =PoseStamped()
     self.feasible_pose = PoseStamped()
     self.twist_msg = Twist()
     self.vel = np.zeros((3))
@@ -45,6 +46,7 @@ class Optitrack(Node):
     self.time = 0
     self.debug = debug
     self.calls = 0
+    self.total_calls = 0
     if self.debug:
       self.debug_timer = self.create_timer(1.0, self.debug_timer_callback)
 
@@ -116,36 +118,33 @@ class Optitrack(Node):
 
   def debug_timer_callback(self):
     print("Hz: "+str(self.calls))
+    
     self.calls = 0
 
   def pub_timer_callback(self):
  
+    if self.total_calls>=1:#this publishes only if it has received at least 1 message in the other thread
+      #I canno compute twist here cause if I have delay in the other thread I compute 0
+      #self.feasible_pose = deepcopy(self.actual_pose) 
 
-    old_pos = np.array([self.feasible_pose.pose.position.x, self.feasible_pose.pose.position.y, self.feasible_pose.pose.position.z])
-    act_pos = np.array([self.actual_pose.pose.position.x, self.actual_pose.pose.position.y, self.actual_pose.pose.position.z])
-    r,p,y_new = self.euler_from_quaternion(self.actual_pose.pose.orientation)
-    r,p,y_old = self.euler_from_quaternion(self.feasible_pose.pose.orientation)
-    self.vel = (act_pos - old_pos)*self.publisher_frequency
-    self.omega[2] = (y_new - y_old)*self.publisher_frequency
+      self.feasible_pose.header.stamp = self.actual_pose.header.stamp
+      self.feasible_pose.pose.position.x = self.actual_pose.pose.position.x 
+      self.feasible_pose.pose.position.y = self.actual_pose.pose.position.y 
+      self.feasible_pose.pose.position.z = self.actual_pose.pose.position.z 
+      self.feasible_pose.pose.orientation.w = self.actual_pose.pose.orientation.w 
+      self.feasible_pose.pose.orientation.x = self.actual_pose.pose.orientation.x 
+      self.feasible_pose.pose.orientation.y = self.actual_pose.pose.orientation.y 
+      self.feasible_pose.pose.orientation.z = self.actual_pose.pose.orientation.z 
 
-    self.feasible_pose.header.stamp = self.actual_pose.header.stamp
-    self.feasible_pose.pose.position.x = self.actual_pose.pose.position.x 
-    self.feasible_pose.pose.position.y = self.actual_pose.pose.position.y 
-    self.feasible_pose.pose.position.z = self.actual_pose.pose.position.z 
-    self.feasible_pose.pose.orientation.w = self.actual_pose.pose.orientation.w 
-    self.feasible_pose.pose.orientation.x = self.actual_pose.pose.orientation.x 
-    self.feasible_pose.pose.orientation.y = self.actual_pose.pose.orientation.y 
-    self.feasible_pose.pose.orientation.z = self.actual_pose.pose.orientation.z 
+      self.publisher_pose.publish(self.feasible_pose)
 
-    self.publisher_pose.publish(self.feasible_pose)
-
-    self.twist_msg.linear.x = self.vel[0]
-    self.twist_msg.linear.y = self.vel[1]
-    self.twist_msg.linear.z = self.vel[2]
-    self.twist_msg.angular.x = self.omega[0]
-    self.twist_msg.angular.y = self.omega[1]
-    self.twist_msg.angular.z = self.omega[2]
-    self.publisher_twist.publish(self.twist_msg)
+      self.twist_msg.linear.x = self.vel[0]
+      self.twist_msg.linear.y = self.vel[1]
+      self.twist_msg.linear.z = self.vel[2]
+      self.twist_msg.angular.x = self.omega[0]
+      self.twist_msg.angular.y = self.omega[1]
+      self.twist_msg.angular.z = self.omega[2]
+      self.publisher_twist.publish(self.twist_msg)
     
   def receiveRigidBodyFrame(self, id, position, rotation):
     if (id==TRACKED_ROBOT_ID):
@@ -188,9 +187,19 @@ class Optitrack(Node):
       #     # update the value if there are no discontiuities
       #     self.feasible_pose = deepcopy(self.actual_pose)
 
-      dt=self.getTimeInterval(self.feasible_pose.header.stamp, self.feasible_pose.header.stamp)
+      #this cannot be zero
+      dt=self.getTimeInterval(self.actual_pose.header.stamp, self.actual_pose_old.header.stamp)
       
-      #self.feasible_pose = deepcopy(self.actual_pose) 
+      if dt>0.: #do the computation only when dt is non zero (eg skip initial point)
+      
+        old_pos = np.array([self.actual_pose_old.pose.position.x, self.actual_pose_old.pose.position.y, self.actual_pose_old.pose.position.z])
+        act_pos = np.array([self.actual_pose.pose.position.x, self.actual_pose.pose.position.y, self.actual_pose.pose.position.z])
+        r,p,y_new = self.euler_from_quaternion(self.actual_pose.pose.orientation)
+        r,p,y_old = self.euler_from_quaternion(self.actual_pose_old.pose.orientation)
+        self.vel = (act_pos - old_pos)*self.publisher_frequency
+        self.omega[2] = (y_new - y_old)*self.publisher_frequency
+        self.actual_pose_old = deepcopy(self.actual_pose)
+
 
     
       # if self.debug:
@@ -198,6 +207,7 @@ class Optitrack(Node):
       #   print("Optitrack time", self.time)
 
       self.calls = self.calls + 1
+      self.total_calls = self.total_calls + 1
 
     else:
       self.get_logger().info('Message with different tracker ID' + str(id))
