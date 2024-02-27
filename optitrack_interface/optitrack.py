@@ -118,7 +118,6 @@ class Optitrack(Node):
 
   def debug_timer_callback(self):
     print("Hz: "+str(self.calls))
-    
     self.calls = 0
 
   def pub_timer_callback(self):
@@ -152,16 +151,21 @@ class Optitrack(Node):
       # retrieve as originally published by the optitrack
       self.actual_pose.header.frame_id = "tag"
       self.actual_pose.header.stamp = self.get_clock().now().to_msg()
-
-
+      #raw      
+      # self.actual_pose.pose.position.x = position[0]
+      # self.actual_pose.pose.position.y = position[1]
+      # self.actual_pose.pose.position.z = position[2]
+      
+      
       self.actual_pose.pose.position.x = self.R_w[0,0]*position[0] + self.R_w[0,1]*position[1]  + self.R_w[0,2]*position[2]
       self.actual_pose.pose.position.y = self.R_w[1,0]*position[0] + self.R_w[1,1]*position[1]  + self.R_w[1,2]*position[2]
       self.actual_pose.pose.position.z = self.R_w[2,0]*position[0] + self.R_w[2,1]*position[1]  + self.R_w[2,2]*position[2]
       #In streamed NatNet data packets, orientation data is represented in the quaternion format (qx, qy, qz, qw). I   ] # q_w
       self.actual_pose.pose.orientation.w = rotation[3] # q_w
       self.actual_pose.pose.orientation.x = rotation[0] # q_x
-      self.actual_pose.pose.orientation.y = rotation[2] # q_z
-      self.actual_pose.pose.orientation.z = rotation[1] # -q_y
+      self.actual_pose.pose.orientation.y = -rotation[2] # -q_z
+      self.actual_pose.pose.orientation.z = rotation[1] # q_y
+
 
       #flip quaternion if long path 
       old_quat = np.array([self.feasible_pose.pose.orientation.w, self.feasible_pose.pose.orientation.x, self.feasible_pose.pose.orientation.y, self.feasible_pose.pose.orientation.z])
